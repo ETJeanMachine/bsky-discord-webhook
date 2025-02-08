@@ -1,0 +1,14 @@
+{
+    "jetstreamUrl": "jetstream1.us-west.bsky.network",
+    "discordWebhook": "https://discord.com/api/webhooks/1245678...",
+    "queryParams": {
+        "wantedDids": [
+            "did:plc:123abc...",
+            "did:plc:789xyz..."
+        ],
+        "wantedCollections": [
+            "app.bsky.feed.post",
+            "app.bsky.feed.repost"
+        ]
+    }
+}
