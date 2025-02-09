@@ -1,2 +1,4 @@
 data.json
 venv/
+.DS_Store
+.vscode
