@@ -4,7 +4,7 @@ from urllib.parse import *
 from websockets.asyncio.client import connect
 
 # opening our data file, parsing params, generating our websocket url.
-with open("data.json", "r") as file:
+with open("config.json", "r") as file:
     data = json.load(file)
 query_params = urlencode(data["queryParams"], doseq=True)
 websocket_url = f"wss://{data["jetstreamUrl"]}/subscribe?{query_params}"
