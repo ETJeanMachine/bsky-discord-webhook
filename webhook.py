@@ -1,47 +1,83 @@
-import asyncio, aiohttp
-import sys, json, time
+import asyncio, aiohttp, atproto
+import sys, json
+from atproto_client import AsyncClient
+from atproto import AtUri
 from urllib.parse import *
+from dateutil import parser
+from discord import Webhook, Embed, ButtonStyle, Color
+from discord.ui import Button, View
 from websockets.asyncio.client import connect
 
 # opening our data file, parsing params, generating our websocket url.
 with open("config.json", "r") as file:
     data = json.load(file)
-query_params = urlencode(data["queryParams"], doseq=True)
-websocket_url = f"wss://{data["jetstreamUrl"]}/subscribe?{query_params}"
-discord_webhook = data["discordWebhook"]
+bsky_color = Color.from_str("#1283fe")
+client = AsyncClient("https://public.api.bsky.app")
 
 
-def construct_payload(content: dict):
+def get_at_uri(content):
     did = content["did"]
-    profile = profiles[did]
-    commit = content["commit"]
-    record = content["commit"]["record"]
+    collection = content["commit"]["collection"]
+    rkey = content["commit"]["rkey"]
+    return AtUri.from_str(f"at://{did}/{collection}/{rkey}")
 
-    url = (
-        f"https://bsky.app/profile/{did}/post/{commit["rkey"]}"
-        if record["$type"] == "app.bsky.feed.post"
-        else record["subject"]["uri"].replace("at://", "🔁\nhttps://bsky.app/profile/").replace("app.bsky.feed.", "")
+
+async def construct_embed(
+    at_uri: AtUri,
+    profile: atproto.models.AppBskyActorDefs.ProfileViewDetailed,
+    is_repost: bool,
+):
+    response = await client.get_post(at_uri.rkey, at_uri.host)
+    post = response.value
+    author = await client.get_profile(at_uri.host)
+    author_url = f"https://bsky.app/profile/{author.handle}"
+    embed_url = f"https://bsky.app/profile/{profile.handle}"
+    link_url = f"{author_url}/post/{at_uri.rkey}"
+    timestamp = parser.parse(post.created_at)
+    title = f":repeat: Reposted by {profile.display_name}" if is_repost else None
+    embed = Embed(
+        color=bsky_color,
+        description=post.text,
+        timestamp=timestamp,
+        url=embed_url,
+        title=title,
     )
-
-    payload = {
-        "username": f"@{profile["handle"]}",
-        "avatar_url": profile["avatar"],
-        "content": url,
-    }
-    return payload
+    embed.set_author(
+        name=f"{author.display_name} (@{author.handle})",
+        icon_url=author.avatar,
+        url=author_url,
+    )
+    if post.embed is not None:
+        pass
+    return embed
 
 
 async def send(content: dict):
     async with aiohttp.ClientSession() as session:
-        payload = construct_payload(content)
-        params = {"wait": "true"}
-        response = await session.post(discord_webhook, params=params, json=payload)
-        resp_json = await response.json()
-        print(resp_json)
+        webhook = Webhook.from_url(data["discordWebhook"], session=session)
+        profile = await client.get_profile(content["did"])
+        is_repost = False
+        match content["commit"]["collection"]:
+            case "app.bsky.feed.post":
+                at_uri = get_at_uri(content)
+            case _:
+                at_uri = AtUri.from_str(content["commit"]["record"]["subject"]["uri"])
+                is_repost = True
+        embed = await construct_embed(at_uri, profile, is_repost)
+        await webhook.send(
+            embed=embed,
+            username=f"{profile.display_name} (@{profile.handle})",
+            avatar_url=profile.avatar,
+            # view=view,
+            wait=True,
+        )
 
 
-async def handler():
+async def main():
+    query_params = urlencode(data["queryParams"], doseq=True)
+    websocket_url = f"wss://{data["jetstreamUrl"]}/subscribe?{query_params}"
     async with connect(websocket_url) as ws:
+        print("Connected and listening...")
         while True:
             try:
                 response = await ws.recv(decode=False)
@@ -49,24 +85,11 @@ async def handler():
                 if content["commit"]["operation"] == "create":
                     await send(content)
             except KeyboardInterrupt:
-                exit(1)
+                break
             except Exception as e:
                 print(f"Error: {e}", file=sys.stderr)
                 await asyncio.sleep(5)
 
 
-async def main():
-    # fetching the profiles of our DID's
-    async with aiohttp.ClientSession() as session:
-        actors = {"actors": data["queryParams"]["wantedDids"]}
-        response = await session.get(
-            "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfiles", params=actors
-        )
-        resp_json = await response.json()
-        profile_list = resp_json["profiles"]
-        global profiles
-        profiles = {item["did"]: item for item in profile_list}
-    await handler()
-
-
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
