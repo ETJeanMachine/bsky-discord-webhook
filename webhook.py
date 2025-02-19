@@ -22,7 +22,7 @@ def get_at_uri(content):
     return AtUri.from_str(f"at://{did}/{collection}/{rkey}")
 
 
-async def construct_embed(
+async def construct_embeds(
     at_uri: AtUri,
     profile: atproto.models.AppBskyActorDefs.ProfileViewDetailed,
     is_repost: bool,
@@ -31,25 +31,49 @@ async def construct_embed(
     post = response.value
     author = await client.get_profile(at_uri.host)
     author_url = f"https://bsky.app/profile/{author.handle}"
-    embed_url = f"https://bsky.app/profile/{profile.handle}"
+    profile_url = f"https://bsky.app/profile/{profile.handle}"
     link_url = f"{author_url}/post/{at_uri.rkey}"
     timestamp = parser.parse(post.created_at)
-    title = f":repeat: Reposted by {profile.display_name}" if is_repost else None
     embed = Embed(
         color=bsky_color,
         description=post.text,
         timestamp=timestamp,
-        url=embed_url,
-        title=title,
+        url=link_url,
     )
+    if is_repost:
+        embed.add_field(
+            name=":repeat: Reposted by",
+            value=f"[@{profile.handle}]({profile_url})",
+            inline=False,
+        )
     embed.set_author(
         name=f"{author.display_name} (@{author.handle})",
         icon_url=author.avatar,
         url=author_url,
     )
+    embed.set_footer(
+        text="BlueSky",
+        icon_url="https://bsky.app/static/apple-touch-icon.png",
+    )
+    embeds = [embed]
     if post.embed is not None:
-        pass
-    return embed
+        match post.embed.py_type:
+            case "app.bsky.embed.images":
+                for image in post.embed.images:
+                    blob = image.image.ref.link
+                    image_url = f"https://cdn.bsky.app/img/feed_fullsize/plain/{author.did}/{blob}"
+                    image_embed = embed.copy()
+                    image_embed.set_image(url=image_url)
+                    embeds.append(image_embed)
+            case "app.bsky.embed.video":
+                pass
+            case "app.bsky.embed.record":
+                pass
+            case "app.bsky.embed.recordWithMedia":
+                pass
+            case "app.bsky.embed.external":
+                pass
+    return embeds
 
 
 async def send(content: dict):
@@ -63,9 +87,9 @@ async def send(content: dict):
             case _:
                 at_uri = AtUri.from_str(content["commit"]["record"]["subject"]["uri"])
                 is_repost = True
-        embed = await construct_embed(at_uri, profile, is_repost)
+        embeds = await construct_embeds(at_uri, profile, is_repost)
         await webhook.send(
-            embed=embed,
+            embeds=embeds,
             username=f"{profile.display_name} (@{profile.handle})",
             avatar_url=profile.avatar,
             # view=view,
